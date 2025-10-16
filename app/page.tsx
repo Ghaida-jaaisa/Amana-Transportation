@@ -1,9 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+
+// ✅ Make sure your folder is "components" (plural):
 import Map from "./component/Map";
 import VehicleCard from "./component/VehicleCard";
 import StatsCard from "./component/StatsCard";
+
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -18,69 +21,114 @@ import {
   Bell,
 } from "lucide-react";
 
-const Index = () => {
+type VehicleStatus = "active" | "idle" | "offline";
+
+type Vehicle = {
+  id: string;
+  name: string;
+  driver: string;
+  status: VehicleStatus;
+  location: string;
+  speed: number;
+  lastUpdate: string;
+  position: [number, number];
+};
+
+function mapStatus(s: string | null | undefined): VehicleStatus {
+  const x = (s || "").toLowerCase();
+  if (x.includes("active")) return "active";
+  if (x.includes("maintenance") || x.includes("out of service")) return "offline";
+  return "idle";
+}
+
+// Transform the sample structure you provided -> Vehicle[]
+function toVehicles(apiJson: any): Vehicle[] {
+  const lines = apiJson?.bus_lines ?? [];
+  if (!Array.isArray(lines)) return [];
+
+  return lines
+    .map((line: any, idx: number) => {
+      const lat = Number(line?.current_location?.latitude);
+      const lng = Number(line?.current_location?.longitude);
+      if (Number.isNaN(lat) || Number.isNaN(lng)) return null;
+
+      return {
+        id:
+          line.id !== undefined
+            ? String(line.id)
+            : String(line.route_number ?? line.name ?? idx),
+        name: line.name ?? `Route ${line.route_number ?? ""}`.trim(),
+        driver: line?.driver?.name ?? "Unknown",
+        status: mapStatus(line?.status),
+        location: line?.current_location?.address ?? "Unknown",
+        // Using average_speed from route_info as a proxy for display
+        speed: Number(line?.route_info?.average_speed ?? 0),
+        // No explicit "last update" in sample; show a friendly default
+        lastUpdate: "Just now",
+        position: [lat, lng] as [number, number],
+      } as Vehicle;
+    })
+    .filter(Boolean) as Vehicle[];
+}
+
+export default function Index() {
   const [searchQuery, setSearchQuery] = useState("");
+  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
 
-  // Vehicle data
-  const vehicles = [
-    {
-      id: "1",
-      name: "Vehicle 101",
-      driver: "Ahmed Mohamed",
-      status: "active" as const,
-      location: "Jalan Tun Razak", // major road in Kuala Lumpur
-      speed: 65,
-      lastUpdate: "2 minutes ago",
-      position: [3.139, 101.6869], // Kuala Lumpur
-    },
-    {
-      id: "2",
-      name: "Vehicle 102",
-      driver: "Khaled Ali",
-      status: "idle" as const,
-      location: "Bukit Bintang", // popular district
-      speed: 0,
-      lastUpdate: "5 minutes ago",
-      position: [3.1478, 101.7134],
-    },
-    {
-      id: "3",
-      name: "Vehicle 103",
-      driver: "Saad Abdullah",
-      status: "active" as const,
-      location: "Jalan Ampang", // famous road near KLCC
-      speed: 45,
-      lastUpdate: "1 minute ago",
-      position: [3.157, 101.712],
-    },
-    {
-      id: "4",
-      name: "Vehicle 104",
-      driver: "Mohammed Saeed",
-      status: "offline" as const,
-      location: "Petaling Jaya", // nearby city
-      speed: 0,
-      lastUpdate: "1 hour ago",
-      position: [3.1073, 101.6067],
-    },
-  ];
+  // Prefer NEXT_PUBLIC_VEHICLES_API in the browser, else use local proxy
+  const apiUrl = process.env.NEXT_PUBLIC_VEHICLES_API || "/api/vehicles";
 
+  useEffect(() => {
+    let mounted = true;
+    const controller = new AbortController();
 
-  // Filter vehicles based on search input
-  const filteredVehicles = vehicles.filter(
-    (vehicle) =>
-      vehicle.name.includes(searchQuery) ||
-      vehicle.driver.includes(searchQuery) ||
-      vehicle.location.includes(searchQuery)
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch(apiUrl, { signal: controller.signal });
+        if (!res.ok) throw new Error(`Failed to fetch vehicles: ${res.status}`);
+        const json = await res.json();
+        const parsed = toVehicles(json);
+        if (mounted) setVehicles(parsed);
+      } catch (e: any) {
+        if (mounted) setError(e?.message ?? "Failed to load data");
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    })();
+
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
+  }, [apiUrl]);
+
+  // Filter vehicles based on search input (case-insensitive)
+  const filteredVehicles = useMemo(() => {
+    const q = searchQuery.toLowerCase().trim();
+    if (!q) return vehicles;
+    return vehicles.filter(
+      (v) =>
+        v.name.toLowerCase().includes(q) ||
+        v.driver.toLowerCase().includes(q) ||
+        v.location.toLowerCase().includes(q)
+    );
+  }, [vehicles, searchQuery]);
+
+  // Prepare map markers for your Map component
+  const markers = useMemo(
+    () =>
+      vehicles.map((v) => ({
+        id: v.id,
+        position: v.position,
+        title: v.name,
+        status: v.status,
+      })),
+    [vehicles]
   );
-
-  // Prepare map markers
-  const markers = vehicles.map((v) => ({
-    id: v.id,
-    position: v.position as [number, number],
-    title: v.name,
-    status: v.status,
-  }));
 
   return (
     <div className="min-h-screen bg-background">
@@ -88,12 +136,12 @@ const Index = () => {
       <header className="bg-card/80 backdrop-blur-xl border-b border-border/50 shadow-soft sticky top-0 z-50">
         <div className="container mx-auto px-4 py-3">
           <div className="flex items-center justify-between">
-            {/* Left side - site name and logo */}
+            {/* Left side */}
             <div className="flex items-center gap-3 group order-1">
               <div className="w-12 h-12 gradient-primary rounded-xl flex items-center justify-center bg-blue-400">
                 <Car className="w-7 h-7 text-white" />
               </div>
-              <div >
+              <div>
                 <h1 className="text-2xl font-bold bg-gradient-to-r from-sky-500 to-blue-400 bg-clip-text text-transparent">
                   Transport Authority
                 </h1>
@@ -103,42 +151,27 @@ const Index = () => {
               </div>
             </div>
 
-            {/* Right side - nav */}
+            {/* Right side */}
             <div className="flex items-center gap-4 order-2">
               <nav className="hidden md:flex items-center gap-2">
-                <Button
-                  variant="ghost"
-                  className="gap-2 hover-scale transition-all duration-200 hover:bg-primary/10 hover:text-primary text-slate-700"
-                >
+                <Button variant="ghost" className="gap-2 hover:bg-primary/10 hover:text-primary text-slate-700">
                   <BarChart3 className="w-4 h-4" />
                   <span>Reports</span>
                 </Button>
-                <Button
-                  variant="ghost"
-                  className="gap-2 hover-scale transition-all duration-200 hover:bg-primary/10 hover:text-primary  text-slate-700"
-                >
+                <Button variant="ghost" className="gap-2 hover:bg-primary/10 hover:text-primary text-slate-700">
                   <Clock className="w-4 h-4" />
                   <span>Logs</span>
                 </Button>
-                <Button
-                  variant="ghost"
-                  className="gap-2 hover-scale transition-all duration-200 hover:bg-primary/10 hover:text-primary  text-slate-700"
-                >
+                <Button variant="ghost" className="gap-2 hover:bg-primary/10 hover:text-primary text-slate-700">
                   <Settings className="w-4 h-4" />
                   <span>Settings</span>
                 </Button>
                 <div className="h-6 w-px bg-border mx-2" />
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="relative hover-scale transition-all duration-200 hover:bg-primary/10 hover:text-primary  text-slate-700"
-                >
+                <Button variant="ghost" size="icon" className="relative hover:bg-primary/10 hover:text-primary text-slate-700">
                   <Bell className="w-5 h-5" />
                   <span className="absolute top-1 left-1 w-2 h-2 bg-destructive rounded-full animate-pulse" />
                 </Button>
               </nav>
-
-              {/* Mobile icon */}
               <Button variant="outline" size="icon" className="md:hidden hover-scale">
                 <Settings className="w-5 h-5  text-slate-700" />
               </Button>
@@ -147,10 +180,8 @@ const Index = () => {
         </div>
       </header>
 
-
-
       <main className="container mx-auto px-4 py-6 space-y-6">
-        {/* Stats Section */}
+        {/* Stats */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <StatsCard title="Total Vehicles" value={vehicles.length} icon={Car} />
           <StatsCard
@@ -170,7 +201,7 @@ const Index = () => {
           />
         </div>
 
-        {/* Main Content */}
+        {/* Main */}
         <Tabs defaultValue="map" className="justify-center space-y-4">
           <TabsList className="flex justify-center w-full">
             <div className="grid w-full max-w-md grid-cols-2">
@@ -183,7 +214,17 @@ const Index = () => {
           <TabsContent value="map" className="space-y-4">
             <div className="bg-card rounded-lg p-4 shadow-soft border border-border">
               <div className="h-[500px] w-full">
-                <Map markers={markers} />
+                {loading ? (
+                  <div className="flex items-center justify-center h-full">
+                    Loading map…
+                  </div>
+                ) : error ? (
+                  <div className="flex items-center justify-center h-full text-destructive">
+                    {error}
+                  </div>
+                ) : (
+                  <Map markers={markers} />
+                )}
               </div>
             </div>
           </TabsContent>
@@ -201,17 +242,32 @@ const Index = () => {
               />
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {filteredVehicles.map((vehicle) => (
-                <VehicleCard key={vehicle.id} {...vehicle} />
-              ))}
-            </div>
-
-            {filteredVehicles.length === 0 && (
-              <div className="text-center py-12 text-muted-foreground">
-                <AlertCircle className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                <p>No search results found</p>
+            {loading && (
+              <div className="text-center py-6 text-muted-foreground">
+                Loading vehicles…
               </div>
+            )}
+            {error && !loading && (
+              <div className="text-center py-6 text-destructive">
+                Error loading vehicles: {error}
+              </div>
+            )}
+
+            {!loading && !error && (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {filteredVehicles.map((vehicle) => (
+                    <VehicleCard key={vehicle.id} {...vehicle} />
+                  ))}
+                </div>
+
+                {filteredVehicles.length === 0 && (
+                  <div className="text-center py-12 text-muted-foreground">
+                    <AlertCircle className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                    <p>No search results found</p>
+                  </div>
+                )}
+              </>
             )}
           </TabsContent>
         </Tabs>
@@ -225,6 +281,4 @@ const Index = () => {
       </footer>
     </div>
   );
-};
-
-export default Index;
+}
