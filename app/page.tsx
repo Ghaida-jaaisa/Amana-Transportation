@@ -42,27 +42,60 @@ function mapStatus(s: string | null | undefined): VehicleStatus {
 }
 
 // Transform the sample structure you provided -> Vehicle[]
-function toVehicles(apiJson: any): Vehicle[] {
-  const lines = apiJson?.bus_lines ?? [];
-  if (!Array.isArray(lines)) return [];
+type ApiLocation = {
+  latitude?: string | number | null;
+  longitude?: string | number | null;
+  address?: string | null;
+};
 
+type ApiDriver = {
+  name?: string | null;
+};
+
+type ApiRouteInfo = {
+  average_speed?: number | string | null;
+};
+
+type ApiLine = {
+  id?: string | number | null;
+  name?: string | null;
+  route_number?: string | number | null;
+  driver?: ApiDriver | null;
+  status?: string | null;
+  current_location?: ApiLocation | null;
+  route_info?: ApiRouteInfo | null;
+};
+
+type ApiResponse = {
+  bus_lines?: unknown;
+};
+
+function toVehicles(apiJson: ApiResponse): Vehicle[] {
+  const lines = (apiJson?.bus_lines as ApiLine[] | undefined) ?? [];
+  if (!Array.isArray(lines)) return [];
   return lines
-    .map((line: any, idx: number) => {
-      const lat = Number(line?.current_location?.latitude);
-      const lng = Number(line?.current_location?.longitude);
+    .map((line: ApiLine | null | undefined, idx: number) => {
+      if (!line) return null;
+
+      const lat = Number(line.current_location?.latitude ?? NaN);
+      const lng = Number(line.current_location?.longitude ?? NaN);
       if (Number.isNaN(lat) || Number.isNaN(lng)) return null;
 
+      const id =
+        line.id !== undefined && line.id !== null
+          ? String(line.id)
+          : String(line.route_number ?? line.name ?? idx);
+
+      const name = (line.name ?? `Route ${line.route_number ?? ""}`).toString().trim();
+
       return {
-        id:
-          line.id !== undefined
-            ? String(line.id)
-            : String(line.route_number ?? line.name ?? idx),
-        name: line.name ?? `Route ${line.route_number ?? ""}`.trim(),
-        driver: line?.driver?.name ?? "Unknown",
+        id,
+        name,
+        driver: line.driver?.name ?? "Unknown",
         status: mapStatus(line?.status),
-        location: line?.current_location?.address ?? "Unknown",
+        location: line.current_location?.address ?? "Unknown",
         // Using average_speed from route_info as a proxy for display
-        speed: Number(line?.route_info?.average_speed ?? 0),
+        speed: Number(line.route_info?.average_speed ?? 0),
         // No explicit "last update" in sample; show a friendly default
         lastUpdate: "Just now",
         position: [lat, lng] as [number, number],
@@ -90,11 +123,16 @@ export default function Index() {
       try {
         const res = await fetch(apiUrl, { signal: controller.signal });
         if (!res.ok) throw new Error(`Failed to fetch vehicles: ${res.status}`);
-        const json = await res.json();
-        const parsed = toVehicles(json);
+        const json = (await res.json()) as unknown;
+        const parsed = toVehicles(json as ApiResponse);
         if (mounted) setVehicles(parsed);
-      } catch (e: any) {
-        if (mounted) setError(e?.message ?? "Failed to load data");
+      } catch (err) {
+        // Narrow error safely without using `any`
+        const message =
+          err && typeof err === "object" && "message" in err
+            ? String((err as { message?: unknown }).message ?? "Failed to load data")
+            : String(err ?? "Failed to load data");
+        if (mounted) setError(message);
       } finally {
         if (mounted) setLoading(false);
       }
@@ -111,7 +149,7 @@ export default function Index() {
     const q = searchQuery.toLowerCase().trim();
     if (!q) return vehicles;
     return vehicles.filter(
-      (v) =>
+      (v: Vehicle) =>
         v.name.toLowerCase().includes(q) ||
         v.driver.toLowerCase().includes(q) ||
         v.location.toLowerCase().includes(q)
@@ -121,7 +159,7 @@ export default function Index() {
   // Prepare map markers for your Map component
   const markers = useMemo(
     () =>
-      vehicles.map((v) => ({
+      vehicles.map((v: Vehicle) => ({
         id: v.id,
         position: v.position,
         title: v.name,
@@ -186,17 +224,17 @@ export default function Index() {
           <StatsCard title="Total Vehicles" value={vehicles.length} icon={Car} />
           <StatsCard
             title="Active Vehicles"
-            value={vehicles.filter((v) => v.status === "active").length}
+            value={vehicles.filter((v: Vehicle) => v.status === "active").length}
             icon={TrendingUp}
           />
           <StatsCard
             title="Idle Vehicles"
-            value={vehicles.filter((v) => v.status === "idle").length}
+            value={vehicles.filter((v: Vehicle) => v.status === "idle").length}
             icon={Clock}
           />
           <StatsCard
             title="Offline"
-            value={vehicles.filter((v) => v.status === "offline").length}
+            value={vehicles.filter((v: Vehicle) => v.status === "offline").length}
             icon={AlertCircle}
           />
         </div>
@@ -237,7 +275,7 @@ export default function Index() {
                 type="text"
                 placeholder="Search for a vehicle or driver..."
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={(e: Event) => setSearchQuery((e.target as HTMLInputElement).value)}
                 className="flex-1 border-0 focus-visible:ring-0"
               />
             </div>
@@ -256,8 +294,17 @@ export default function Index() {
             {!loading && !error && (
               <>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {filteredVehicles.map((vehicle) => (
-                    <VehicleCard key={vehicle.id} {...vehicle} />
+                  {filteredVehicles.map((vehicle: Vehicle) => (
+                    <VehicleCard
+                      key={vehicle.id}
+                      id={vehicle.id}
+                      name={vehicle.name}
+                      driver={vehicle.driver}
+                      status={vehicle.status}
+                      location={vehicle.location}
+                      speed={vehicle.speed}
+                      lastUpdate={vehicle.lastUpdate}
+                    />
                   ))}
                 </div>
 
