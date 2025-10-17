@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-// ✅ Make sure your folder is "components" (plural):
+// ✅ تأكد أن المجلد اسمه "components"
 import Map from "./component/Map";
 import VehicleCard from "./component/VehicleCard";
 import StatsCard from "./component/StatsCard";
@@ -34,6 +34,30 @@ type Vehicle = {
   position: [number, number];
 };
 
+// ✅ أنواع البيانات القادمة من الـ API
+type RawVehicle = {
+  id?: string | number;
+  name?: string;
+  route_number?: string | number;
+  status?: string;
+  driver?: {
+    name?: string;
+  };
+  current_location?: {
+    latitude?: number | string;
+    longitude?: number | string;
+    address?: string;
+  };
+  route_info?: {
+    average_speed?: number | string;
+  };
+};
+
+type RawApiResponse = {
+  bus_lines?: RawVehicle[];
+};
+
+// ✅ تحويل الحالة النصية إلى VehicleStatus
 function mapStatus(s: string | null | undefined): VehicleStatus {
   const x = (s || "").toLowerCase();
   if (x.includes("active")) return "active";
@@ -41,13 +65,13 @@ function mapStatus(s: string | null | undefined): VehicleStatus {
   return "idle";
 }
 
-// Transform the sample structure you provided -> Vehicle[]
-function toVehicles(apiJson: any): Vehicle[] {
-  const lines = apiJson?.bus_lines ?? [];
+// ✅ تحويل JSON القادم من API إلى Vehicle[]
+function toVehicles(apiJson: unknown): Vehicle[] {
+  const lines = (apiJson as RawApiResponse)?.bus_lines ?? [];
   if (!Array.isArray(lines)) return [];
 
   return lines
-    .map((line: any, idx: number) => {
+    .map((line: RawVehicle, idx: number) => {
       const lat = Number(line?.current_location?.latitude);
       const lng = Number(line?.current_location?.longitude);
       if (Number.isNaN(lat) || Number.isNaN(lng)) return null;
@@ -61,12 +85,10 @@ function toVehicles(apiJson: any): Vehicle[] {
         driver: line?.driver?.name ?? "Unknown",
         status: mapStatus(line?.status),
         location: line?.current_location?.address ?? "Unknown",
-        // Using average_speed from route_info as a proxy for display
         speed: Number(line?.route_info?.average_speed ?? 0),
-        // No explicit "last update" in sample; show a friendly default
         lastUpdate: "Just now",
         position: [lat, lng] as [number, number],
-      } as Vehicle;
+      };
     })
     .filter(Boolean) as Vehicle[];
 }
@@ -77,7 +99,6 @@ export default function Index() {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Prefer NEXT_PUBLIC_VEHICLES_API in the browser, else use local proxy
   const apiUrl = process.env.NEXT_PUBLIC_VEHICLES_API || "/api/vehicles";
 
   useEffect(() => {
@@ -93,8 +114,14 @@ export default function Index() {
         const json = await res.json();
         const parsed = toVehicles(json);
         if (mounted) setVehicles(parsed);
-      } catch (e: any) {
-        if (mounted) setError(e?.message ?? "Failed to load data");
+      } catch (e: unknown) {
+        if (mounted) {
+          if (e instanceof Error) {
+            setError(e.message);
+          } else {
+            setError("Failed to load data");
+          }
+        }
       } finally {
         if (mounted) setLoading(false);
       }
@@ -106,7 +133,6 @@ export default function Index() {
     };
   }, [apiUrl]);
 
-  // Filter vehicles based on search input (case-insensitive)
   const filteredVehicles = useMemo(() => {
     const q = searchQuery.toLowerCase().trim();
     if (!q) return vehicles;
@@ -118,7 +144,6 @@ export default function Index() {
     );
   }, [vehicles, searchQuery]);
 
-  // Prepare map markers for your Map component
   const markers = useMemo(
     () =>
       vehicles.map((v) => ({
@@ -136,7 +161,6 @@ export default function Index() {
       <header className="bg-card/80 backdrop-blur-xl border-b border-border/50 shadow-soft sticky top-0 z-50">
         <div className="container mx-auto px-4 py-3">
           <div className="flex items-center justify-between">
-            {/* Left side */}
             <div className="flex items-center gap-3 group order-1">
               <div className="w-12 h-12 gradient-primary rounded-xl flex items-center justify-center bg-blue-400">
                 <Car className="w-7 h-7 text-white" />
@@ -151,7 +175,6 @@ export default function Index() {
               </div>
             </div>
 
-            {/* Right side */}
             <div className="flex items-center gap-4 order-2">
               <nav className="hidden md:flex items-center gap-2">
                 <Button variant="ghost" className="gap-2 hover:bg-primary/10 hover:text-primary text-slate-700">
@@ -227,58 +250,4 @@ export default function Index() {
                 )}
               </div>
             </div>
-          </TabsContent>
-
-          {/* List Tab */}
-          <TabsContent value="list" className="space-y-4">
-            <div className="flex items-center gap-2 bg-card p-4 rounded-lg shadow-soft border border-border">
-              <Search className="w-5 h-5 text-muted-foreground" />
-              <Input
-                type="text"
-                placeholder="Search for a vehicle or driver..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="flex-1 border-0 focus-visible:ring-0"
-              />
-            </div>
-
-            {loading && (
-              <div className="text-center py-6 text-muted-foreground">
-                Loading vehicles…
-              </div>
-            )}
-            {error && !loading && (
-              <div className="text-center py-6 text-destructive">
-                Error loading vehicles: {error}
-              </div>
-            )}
-
-            {!loading && !error && (
-              <>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {filteredVehicles.map((vehicle) => (
-                    <VehicleCard key={vehicle.id} {...vehicle} />
-                  ))}
-                </div>
-
-                {filteredVehicles.length === 0 && (
-                  <div className="text-center py-12 text-muted-foreground">
-                    <AlertCircle className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                    <p>No search results found</p>
-                  </div>
-                )}
-              </>
-            )}
-          </TabsContent>
-        </Tabs>
-      </main>
-
-      {/* Footer */}
-      <footer className="bg-card/80 backdrop-blur-xl border-t border-border/50 text-center py-4 mt-8">
-        <p className="text-sm text-muted-foreground">
-          © {new Date().getFullYear()} Transport Authority. All rights reserved.
-        </p>
-      </footer>
-    </div>
-  );
-}
+          </TabsContent>   
